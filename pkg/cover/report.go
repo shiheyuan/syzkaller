@@ -310,6 +310,26 @@ func fileSet(covered, uncovered []symbolizer.Frame) map[string][]coverage {
 	return res
 }
 
+func NextInstructionPC(arch string,pc uint64) uint64{
+	switch arch {
+	case "amd64":
+		return pc + 5
+	case "386":
+		return pc + 1
+	case "arm64":
+		return pc + 4
+	// 不可逆
+	//case "arm":
+	//	// THUMB instructions are 2 or 4 bytes with low bit set.
+	//	// ARM instructions are always 4 bytes.
+	//	return (pc - 3) & ^uint64(1)
+	case "ppc64le":
+		return pc + 4
+	default:
+		panic("unknown arch")
+	}
+}
+
 func PreviousInstructionPC(arch string, pc uint64) uint64 {
 	switch arch {
 	case "amd64":

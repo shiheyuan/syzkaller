@@ -4,15 +4,19 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"math/rand"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -76,6 +80,7 @@ type Manager struct {
 	newRepros        [][]byte
 	lastMinCorpus    int
 	memoryLeakFrames map[string]bool
+	staticCover      cover.Cover
 
 	needMoreRepros chan chan bool
 	hubReproQueue  chan *Crash
@@ -155,6 +160,7 @@ func RunManager(cfg *mgrconfig.Config, target *prog.Target, sysTarget *targets.T
 		log.Fatalf("%v", err)
 	}
 
+
 	mgr := &Manager{
 		cfg:              cfg,
 		vmPool:           vmPool,
@@ -187,6 +193,13 @@ func RunManager(cfg *mgrconfig.Config, target *prog.Target, sysTarget *targets.T
 	mgr.initHTTP()
 	mgr.collectUsedFiles()
 
+
+	staticCover, err := readPCsFromFile(cfg.TargetArch,cfg.StaticCoverFile)
+	if err != nil {
+		log.Fatalf("Failed to read static cover from:%v, %v", cfg.StaticCoverFile, err)
+	}
+	log.Logf(0, "Static cover loaded, number %v", staticCover.Len())
+	mgr.staticCover = staticCover
 	// Create RPC server for fuzzers.
 	mgr.port, err = startRPCServer(mgr)
 	if err != nil {
@@ -211,13 +224,17 @@ func RunManager(cfg *mgrconfig.Config, target *prog.Target, sysTarget *targets.T
 			mgr.fuzzingTime += diff * time.Duration(atomic.LoadUint32(&mgr.numFuzzing))
 			executed := mgr.stats.execTotal.get()
 			crashes := mgr.stats.crashes.get()
-			signal := mgr.stats.corpusSignal.get()
+			//cov := mgr.stats.corpusCover.get()
+			targetCover := mgr.getCorpusCover()
+			//signal := mgr.stats.corpusSignal.get()
 			mgr.mu.Unlock()
+
+			common := mgr.staticCover.Intersection(targetCover)
 			numReproducing := atomic.LoadUint32(&mgr.numReproducing)
 			numFuzzing := atomic.LoadUint32(&mgr.numFuzzing)
 
-			log.Logf(0, "VMs %v, executed %v, cover %v, crashes %v, repro %v",
-				numFuzzing, executed, signal, crashes, numReproducing)
+			log.Logf(0, "VMs %v, executed %v,cover %v, target cover %v/%v, crashes %v, repro %v",
+				numFuzzing, executed, targetCover.Len(),common.Len(), mgr.staticCover.Len(), crashes, numReproducing)
 		}
 	}()
 
@@ -844,6 +861,10 @@ func (mgr *Manager) getMinimizedCorpus() (corpus, repros [][]byte) {
 	return
 }
 
+func (mgr *Manager) getStaticCover() (cover.Cover) {
+	return mgr.staticCover
+}
+
 func (mgr *Manager) addNewCandidates(progs [][]byte) {
 	candidates := make([]rpctype.RPCCandidate, len(progs))
 	for i, inp := range progs {
@@ -1079,4 +1100,42 @@ func publicWebAddr(addr string) string {
 		}
 	}
 	return "http://" + addr
+}
+
+// 从文件读取raw cover
+func readPCsFromFile(arch string,file string) (cover.Cover, error) {
+	var result []uint32
+	data, err := ioutil.ReadFile(file)
+	if err != nil {
+		return nil, err
+	}
+
+	for s := bufio.NewScanner(bytes.NewReader(data)); s.Scan(); {
+		pc, err := strconv.ParseUint(s.Text(), 0, 64)
+		if err != nil {
+			return nil, err
+		}
+		// cover in syzkaller is not same as collect raw cover
+		nextPc := cover.NextInstructionPC(arch,pc)
+		cov := cover.CovertPC(nextPc,initCoverVMOffset)
+		result = append(result, cov)
+	}
+	return cover.FromRaw(result), nil
+}
+
+func (mgr *Manager)getCorpusCover()cover.Cover{
+	cov := make(cover.Cover)
+	for _, inp := range mgr.corpus {
+		cov.Merge(inp.Cover)
+	}
+	pcs := make([]uint64, 0, len(cov))
+	for pc := range cov {
+		fullPC := cover.RestorePC(pc, initCoverVMOffset)
+		prevPC := cover.PreviousInstructionPC(mgr.cfg.TargetVMArch, fullPC)
+		pcs = append(pcs, prevPC)
+	}
+	sort.Slice(pcs, func(i, j int) bool {
+		return pcs[i] < pcs[j]
+	})
+	return cov
 }

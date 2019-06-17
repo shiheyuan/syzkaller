@@ -6,6 +6,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/google/syzkaller/pkg/cover"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -54,6 +55,10 @@ type Fuzzer struct {
 	corpusSignal signal.Signal // signal of inputs in corpus
 	maxSignal    signal.Signal // max signal ever observed including flakes
 	newSignal    signal.Signal // diff of maxSignal since last sync with master
+
+	coverMu     sync.RWMutex
+	staticCover cover.Cover
+	corpusCover cover.Cover
 
 	logMu sync.Mutex
 }
@@ -210,6 +215,16 @@ func main() {
 		return
 	}
 
+	// get static cover from manager
+	staticCover := &rpctype.StaticCover{}
+	empty := 1
+	if err := manager.Call("Manager.GetStaticCover",&empty , staticCover); err != nil {
+		log.Fatalf("Manager.GetStaticCover call failed: %v", err)
+	}
+	if staticCover.Cover.Empty() {
+		log.Fatalf("No static raw cover")
+	}
+
 	needPoll := make(chan struct{}, 1)
 	needPoll <- struct{}{}
 	fuzzer := &Fuzzer{
@@ -224,6 +239,8 @@ func main() {
 		faultInjectionEnabled:    r.CheckResult.Features[host.FeatureFaultInjection].Enabled,
 		comparisonTracingEnabled: r.CheckResult.Features[host.FeatureComparisons].Enabled,
 		corpusHashes:             make(map[hash.Sig]struct{}),
+		staticCover:              staticCover.Cover,
+		corpusCover:              make(cover.Cover),
 	}
 	var gateCallback func()
 	if r.CheckResult.Features[host.FeatureLeakChecking].Enabled {
@@ -372,17 +389,23 @@ func (fuzzer *Fuzzer) addInputFromAnotherFuzzer(inp rpctype.RPCInput) {
 	}
 	sig := hash.Hash(inp.Prog)
 	sign := inp.Signal.Deserialize()
-	fuzzer.addInputToCorpus(p, sign, sig)
+	cov := cover.FromRaw(inp.Cover)
+	fuzzer.addInputToCorpus(p, cov, sign, sig)
 }
 
-func (fuzzer *Fuzzer) addInputToCorpus(p *prog.Prog, sign signal.Signal, sig hash.Sig) {
+func (fuzzer *Fuzzer) addInputToCorpus(p *prog.Prog, newCover cover.Cover, sign signal.Signal, sig hash.Sig) {
 	fuzzer.corpusMu.Lock()
 	if _, ok := fuzzer.corpusHashes[sig]; !ok {
 		fuzzer.corpus = append(fuzzer.corpus, p)
 		fuzzer.corpusHashes[sig] = struct{}{}
 	}
 	fuzzer.corpusMu.Unlock()
-
+	// TODO ADD raw cover
+	if !newCover.Empty() {
+		fuzzer.coverMu.Lock()
+		fuzzer.corpusCover.MergeCover(newCover)
+		fuzzer.coverMu.Unlock()
+	}
 	if !sign.Empty() {
 		fuzzer.signalMu.Lock()
 		fuzzer.corpusSignal.Merge(sign)

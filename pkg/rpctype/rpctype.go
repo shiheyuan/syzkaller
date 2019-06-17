@@ -6,6 +6,7 @@
 package rpctype
 
 import (
+	"github.com/google/syzkaller/pkg/cover"
 	"github.com/google/syzkaller/pkg/host"
 	"github.com/google/syzkaller/pkg/ipc"
 	"github.com/google/syzkaller/pkg/signal"
@@ -126,4 +127,8 @@ type RunTestDoneArgs struct {
 	Output []byte
 	Info   []*ipc.ProgInfo
 	Error  string
+}
+
+type StaticCover struct {
+	Cover cover.Cover
 }

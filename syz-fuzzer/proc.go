@@ -119,7 +119,7 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 		logCallName = fmt.Sprintf("call #%v %v", item.call, callName)
 	}
 	log.Logf(3, "triaging input for %v (new signal=%v)", logCallName, newSignal.Len())
-	var inputCover cover.Cover
+	inputCover  := make(cover.Cover)
 	const (
 		signalRuns       = 3
 		minimizeAttempts = 3
@@ -145,6 +145,21 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 		}
 		inputCover.Merge(thisCover)
 	}
+	if inputCover.Empty() {
+		return
+	}
+	// 当前程序是否产生了目标raw cover
+	common := proc.fuzzer.staticCover.Intersection(inputCover)
+	if common.Empty() {
+		return
+	}
+	// 是否产生了新的目标raw cover 先不加入这个限制 因为即使产生的raw cover集合相同 但signal不同则说明是不同路径
+	// 这种情况也是感兴趣程序
+	//coverDiff := proc.fuzzer.corpusCover.Diff(common)
+	//if coverDiff.Empty() {
+	//	return
+	//}
+
 	if item.flags&ProgMinimized == 0 {
 		item.p, item.call = prog.Minimize(item.p, item.call, false,
 			func(p1 *prog.Prog, call1 int) bool {
@@ -174,7 +189,7 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 		Cover:  inputCover.Serialize(),
 	})
 
-	proc.fuzzer.addInputToCorpus(item.p, inputSignal, sig)
+	proc.fuzzer.addInputToCorpus(item.p, inputCover, inputSignal, sig)
 
 	if item.flags&ProgSmashed == 0 {
 		proc.fuzzer.workQueue.enqueue(&WorkSmash{item.p, item.call})

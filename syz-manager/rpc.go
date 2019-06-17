@@ -42,6 +42,7 @@ type RPCManagerView interface {
 	machineChecked(result *rpctype.CheckArgs)
 	newInput(inp rpctype.RPCInput, sign signal.Signal)
 	candidateBatch(size int) []rpctype.RPCCandidate
+	getStaticCover() cover.Cover
 }
 
 func startRPCServer(mgr *Manager) (int, error) {
@@ -98,6 +99,12 @@ func (serv *RPCServer) Check(a *rpctype.CheckArgs, r *int) error {
 	serv.mgr.machineChecked(a)
 	a.DisabledCalls = nil
 	serv.checkResult = a
+	return nil
+}
+
+func (serv *RPCServer)GetStaticCover(res *int,r *rpctype.StaticCover)error{
+	r.Cover = cover.FromRaw(serv.mgr.getStaticCover().Serialize())
+	log.Logf(0,"Send fuzzer static cover, number %v",r.Cover.Len())
 	return nil
 }
 
