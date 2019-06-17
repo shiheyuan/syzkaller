@@ -8,6 +8,8 @@ import "encoding/json"
 type Config struct {
 	// Instance name (used for identification and as GCE instance prefix).
 	Name string `json:"name"`
+	// static raw cover file path
+	StaticCoverFile string `json:"static_cover_file"`
 	// Target OS/arch, e.g. "linux/arm64" or "linux/amd64/386" (amd64 OS with 386 test process).
 	Target string `json:"target"`
 	// URL that will display information about the running syz-manager process (e.g. "localhost:50000").
