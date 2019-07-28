@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"runtime/debug"
@@ -119,7 +120,7 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 		logCallName = fmt.Sprintf("call #%v %v", item.call, callName)
 	}
 	log.Logf(3, "triaging input for %v (new signal=%v)", logCallName, newSignal.Len())
-	inputCover  := make(cover.Cover)
+	inputCover := make(cover.Cover)
 	const (
 		signalRuns       = 3
 		minimizeAttempts = 3
@@ -148,11 +149,12 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 	if inputCover.Empty() {
 		return
 	}
+
 	// 当前程序是否产生了目标raw cover
-	common := proc.fuzzer.staticCover.Intersection(inputCover)
-	if common.Empty() {
-		return
-	}
+	//common := proc.fuzzer.staticCover.Intersection(inputCover)
+	//if common.Empty() {
+	//	return
+	//}
 	// 是否产生了新的目标raw cover 先不加入这个限制 因为即使产生的raw cover集合相同 但signal不同则说明是不同路径
 	// 这种情况也是感兴趣程序
 	//coverDiff := proc.fuzzer.corpusCover.Diff(common)
@@ -177,23 +179,35 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 				return false
 			})
 	}
-
-	data := item.p.Serialize()
-	sig := hash.Hash(data)
-
-	log.Logf(2, "added new input for %v to corpus:\n%s", logCallName, data)
-	proc.fuzzer.sendInputToManager(rpctype.RPCInput{
-		Call:   callName,
-		Prog:   data,
-		Signal: inputSignal.Serialize(),
-		Cover:  inputCover.Serialize(),
-	})
-
-	proc.fuzzer.addInputToCorpus(item.p, inputCover, inputSignal, sig)
-
-	if item.flags&ProgSmashed == 0 {
-		proc.fuzzer.workQueue.enqueue(&WorkSmash{item.p, item.call})
+	// calculate distance
+	var distance uint32 = 0
+	for newCover, _ := range inputCover {
+		_, contains := proc.fuzzer.rawCoverDistance[newCover]
+		if !contains {
+			distance = math.MaxUint32
+			break
+		}
+		distance += proc.fuzzer.rawCoverDistance[newCover]
 	}
+	if proc.fuzzer.getCloseOrUpdate(distance) {
+		data := item.p.Serialize()
+		sig := hash.Hash(data)
+
+		log.Logf(2, "added new input for %v to corpus:\n%s", logCallName, data)
+		proc.fuzzer.sendInputToManager(rpctype.RPCInput{
+			Call:   callName,
+			Prog:   data,
+			Signal: inputSignal.Serialize(),
+			Cover:  inputCover.Serialize(),
+		})
+		proc.fuzzer.sendDistanceToManager(distance)
+		proc.fuzzer.addInputToCorpus(item.p, inputCover, inputSignal, sig)
+
+		if item.flags&ProgSmashed == 0 {
+			proc.fuzzer.workQueue.enqueue(&WorkSmash{item.p, item.call})
+		}
+	}
+
 }
 
 func reexecutionSuccess(info *ipc.ProgInfo, oldInfo *ipc.CallInfo, call int) bool {

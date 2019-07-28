@@ -8,18 +8,18 @@ Main page.
 <!doctype html>
 <html>
 <head>
-	{{template "head" .Header}}
-	<title>syzbot</title>
+    {{template "head" .Header}}
+    <title>syzbot</title>
 </head>
 <body>
-	{{template "header" .Header}}
+{{template "header" .Header}}
 
-	{{if $.FixedLink}}
-		<a href="{{$.FixedLink}}">fixed bugs ({{$.FixedCount}})</a>
-	{{end}}
-	{{template "manager_list" $.Managers}}
-	{{range $group := $.Groups}}
-		{{template "bug_list" $group}}
-	{{end}}
+{{if $.FixedLink}}
+    <a href="{{$.FixedLink}}">fixed bugs ({{$.FixedCount}})</a>
+{{end}}
+{{template "manager_list" $.Managers}}
+{{range $group := $.Groups}}
+    {{template "bug_list" $group}}
+{{end}}
 </body>
 </html>

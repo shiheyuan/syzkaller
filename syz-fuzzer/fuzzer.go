@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/google/syzkaller/pkg/cover"
+	"math"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -59,6 +60,10 @@ type Fuzzer struct {
 	coverMu     sync.RWMutex
 	staticCover cover.Cover
 	corpusCover cover.Cover
+
+	rawCoverDistance   map[uint32]uint32
+	updateDistanceLock sync.RWMutex
+	minDistance        uint32
 
 	logMu sync.Mutex
 }
@@ -218,11 +223,15 @@ func main() {
 	// get static cover from manager
 	staticCover := &rpctype.StaticCover{}
 	empty := 1
-	if err := manager.Call("Manager.GetStaticCover",&empty , staticCover); err != nil {
+	if err := manager.Call("Manager.GetStaticCover", &empty, staticCover); err != nil {
 		log.Fatalf("Manager.GetStaticCover call failed: %v", err)
 	}
 	if staticCover.Cover.Empty() {
 		log.Fatalf("No static raw cover")
+	}
+	rawCoverDistance := &rpctype.RawCoverDistance{}
+	if err := manager.Call("Manager.GetRawCoverDistance", &empty, rawCoverDistance); err != nil {
+		log.Fatalf("Manager.GetRawCoverDistance call failed: %v", err)
 	}
 
 	needPoll := make(chan struct{}, 1)
@@ -241,6 +250,8 @@ func main() {
 		corpusHashes:             make(map[hash.Sig]struct{}),
 		staticCover:              staticCover.Cover,
 		corpusCover:              make(cover.Cover),
+		rawCoverDistance:         rawCoverDistance.Distance,
+		minDistance:              math.MaxUint32,
 	}
 	var gateCallback func()
 	if r.CheckResult.Features[host.FeatureLeakChecking].Enabled {
@@ -382,6 +393,13 @@ func (fuzzer *Fuzzer) sendInputToManager(inp rpctype.RPCInput) {
 	}
 }
 
+func (fuzzer *Fuzzer) sendDistanceToManager(distance uint32) {
+	a := &rpctype.NewDistance{Distance: distance}
+	if err := fuzzer.manager.Call("Manager.UpdateDistance", a, nil); err != nil {
+		log.Fatalf("Manager.UpdateDistance call failed: %v", err)
+	}
+}
+
 func (fuzzer *Fuzzer) addInputFromAnotherFuzzer(inp rpctype.RPCInput) {
 	p, err := fuzzer.target.Deserialize(inp.Prog, prog.NonStrict)
 	if err != nil {
@@ -412,6 +430,17 @@ func (fuzzer *Fuzzer) addInputToCorpus(p *prog.Prog, newCover cover.Cover, sign 
 		fuzzer.maxSignal.Merge(sign)
 		fuzzer.signalMu.Unlock()
 	}
+}
+
+func (fuzzer *Fuzzer) getCloseOrUpdate(distance uint32) bool {
+	isClose := false
+	fuzzer.updateDistanceLock.Lock()
+	if fuzzer.minDistance > distance {
+		fuzzer.minDistance = distance
+		isClose = true
+	}
+	fuzzer.updateDistanceLock.Unlock()
+	return isClose
 }
 
 func (fuzzer *Fuzzer) corpusSnapshot() []*prog.Prog {

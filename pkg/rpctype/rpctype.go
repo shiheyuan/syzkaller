@@ -132,3 +132,11 @@ type RunTestDoneArgs struct {
 type StaticCover struct {
 	Cover cover.Cover
 }
+
+type RawCoverDistance struct {
+	Distance map[uint32]uint32
+}
+
+type NewDistance struct {
+	Distance uint32
+}

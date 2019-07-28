@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"math"
 	"math/rand"
 	"net"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -81,6 +83,11 @@ type Manager struct {
 	lastMinCorpus    int
 	memoryLeakFrames map[string]bool
 	staticCover      cover.Cover
+
+	// 距离导向
+	rawCoverDistance    map[uint32]uint32
+	distanceUpdateMutex sync.Mutex
+	corpusMinDistance   uint32
 
 	needMoreRepros chan chan bool
 	hubReproQueue  chan *Crash
@@ -160,27 +167,27 @@ func RunManager(cfg *mgrconfig.Config, target *prog.Target, sysTarget *targets.T
 		log.Fatalf("%v", err)
 	}
 
-
 	mgr := &Manager{
-		cfg:              cfg,
-		vmPool:           vmPool,
-		target:           target,
-		sysTarget:        sysTarget,
-		reporter:         reporter,
-		crashdir:         crashdir,
-		startTime:        time.Now(),
-		stats:            new(Stats),
-		crashTypes:       make(map[string]bool),
-		enabledSyscalls:  syscalls,
-		corpus:           make(map[string]rpctype.RPCInput),
-		disabledHashes:   make(map[string]struct{}),
-		memoryLeakFrames: make(map[string]bool),
-		fresh:            true,
-		vmStop:           make(chan bool),
-		hubReproQueue:    make(chan *Crash, 10),
-		needMoreRepros:   make(chan chan bool),
-		reproRequest:     make(chan chan map[string]bool),
-		usedFiles:        make(map[string]time.Time),
+		cfg:               cfg,
+		vmPool:            vmPool,
+		target:            target,
+		sysTarget:         sysTarget,
+		reporter:          reporter,
+		crashdir:          crashdir,
+		startTime:         time.Now(),
+		stats:             new(Stats),
+		crashTypes:        make(map[string]bool),
+		enabledSyscalls:   syscalls,
+		corpus:            make(map[string]rpctype.RPCInput),
+		disabledHashes:    make(map[string]struct{}),
+		memoryLeakFrames:  make(map[string]bool),
+		fresh:             true,
+		vmStop:            make(chan bool),
+		hubReproQueue:     make(chan *Crash, 10),
+		needMoreRepros:    make(chan chan bool),
+		reproRequest:      make(chan chan map[string]bool),
+		usedFiles:         make(map[string]time.Time),
+		corpusMinDistance: math.MaxUint32,
 	}
 
 	log.Logf(0, "loading corpus...")
@@ -193,13 +200,17 @@ func RunManager(cfg *mgrconfig.Config, target *prog.Target, sysTarget *targets.T
 	mgr.initHTTP()
 	mgr.collectUsedFiles()
 
-
-	staticCover, err := readPCsFromFile(cfg.TargetArch,cfg.StaticCoverFile)
+	staticCover, err := readPCsFromFile(cfg.TargetArch, cfg.StaticCoverFile)
 	if err != nil {
 		log.Fatalf("Failed to read static cover from:%v, %v", cfg.StaticCoverFile, err)
 	}
 	log.Logf(0, "Static cover loaded, number %v", staticCover.Len())
 	mgr.staticCover = staticCover
+
+	// read raw cover distance from file
+	mgr.rawCoverDistance = get_distance(cfg.RawCoverDistanceFile, cfg.TargetArch)
+	log.Logf(0, "Raw cover distance loaded,number %v", len(mgr.rawCoverDistance))
+
 	// Create RPC server for fuzzers.
 	mgr.port, err = startRPCServer(mgr)
 	if err != nil {
@@ -226,6 +237,7 @@ func RunManager(cfg *mgrconfig.Config, target *prog.Target, sysTarget *targets.T
 			crashes := mgr.stats.crashes.get()
 			//cov := mgr.stats.corpusCover.get()
 			targetCover := mgr.getCorpusCover()
+			distance := mgr.corpusMinDistance
 			//signal := mgr.stats.corpusSignal.get()
 			mgr.mu.Unlock()
 
@@ -233,8 +245,8 @@ func RunManager(cfg *mgrconfig.Config, target *prog.Target, sysTarget *targets.T
 			numReproducing := atomic.LoadUint32(&mgr.numReproducing)
 			numFuzzing := atomic.LoadUint32(&mgr.numFuzzing)
 
-			log.Logf(0, "VMs %v, executed %v,cover %v, target cover %v/%v, crashes %v, repro %v",
-				numFuzzing, executed, targetCover.Len(),common.Len(), mgr.staticCover.Len(), crashes, numReproducing)
+			log.Logf(0, "VMs %v, executed %v,cover %v, target cover %v/%v, distance:%v,crashes %v, repro %v",
+				numFuzzing, executed, targetCover.Len(), common.Len(), mgr.staticCover.Len(), distance, crashes, numReproducing)
 		}
 	}()
 
@@ -861,8 +873,21 @@ func (mgr *Manager) getMinimizedCorpus() (corpus, repros [][]byte) {
 	return
 }
 
-func (mgr *Manager) getStaticCover() (cover.Cover) {
+func (mgr *Manager) getStaticCover() cover.Cover {
 	return mgr.staticCover
+}
+
+func (mgr *Manager) getRawCoverDistance() map[uint32]uint32 {
+	return mgr.rawCoverDistance
+}
+
+func (mgr *Manager) updateCorpusDistance(newDistance uint32) {
+	mgr.distanceUpdateMutex.Lock()
+	if mgr.corpusMinDistance > newDistance {
+		mgr.corpusMinDistance = newDistance
+	}
+	mgr.distanceUpdateMutex.Unlock()
+
 }
 
 func (mgr *Manager) addNewCandidates(progs [][]byte) {
@@ -1103,7 +1128,7 @@ func publicWebAddr(addr string) string {
 }
 
 // 从文件读取raw cover
-func readPCsFromFile(arch string,file string) (cover.Cover, error) {
+func readPCsFromFile(arch string, file string) (cover.Cover, error) {
 	var result []uint32
 	data, err := ioutil.ReadFile(file)
 	if err != nil {
@@ -1116,14 +1141,14 @@ func readPCsFromFile(arch string,file string) (cover.Cover, error) {
 			return nil, err
 		}
 		// cover in syzkaller is not same as collect raw cover
-		nextPc := cover.NextInstructionPC(arch,pc)
-		cov := cover.CovertPC(nextPc,initCoverVMOffset)
-		result = append(result, cov)
+		//nextPc := cover.NextInstructionPC(arch, pc)
+		//cov := cover.CovertPC(nextPc, initCoverVMOffset)
+		result = append(result, uint32(pc))
 	}
 	return cover.FromRaw(result), nil
 }
 
-func (mgr *Manager)getCorpusCover()cover.Cover{
+func (mgr *Manager) getCorpusCover() cover.Cover {
 	cov := make(cover.Cover)
 	for _, inp := range mgr.corpus {
 		cov.Merge(inp.Cover)
@@ -1138,4 +1163,35 @@ func (mgr *Manager)getCorpusCover()cover.Cover{
 		return pcs[i] < pcs[j]
 	})
 	return cov
+}
+
+// parse raw cover distance file,log fatal if any kinds of error happen
+func get_distance(fileName string, arch string) map[uint32]uint32 {
+	file, err := os.Open(fileName)
+	if err != nil {
+		log.Fatalf("Fail to open rawcover distance file %v", err)
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	result := make(map[uint32]uint32)
+	for scanner.Scan() {
+		line := scanner.Text()
+		// function_name,raw_cover,_,distance
+		content := strings.Split(line, ",")
+		if len(content) != 4 {
+			log.Fatalf("Raw cover file contains bad line:%v", line)
+		}
+		pc, coverParseErr := strconv.ParseUint(content[1], 0, 64)
+		nextPc := cover.NextInstructionPC(arch, pc)
+		cov := cover.CovertPC(nextPc, initCoverVMOffset)
+		distance, distanceParseError := strconv.ParseUint(content[3], 0, 64)
+		if coverParseErr != nil || distanceParseError != nil {
+			log.Fatalf("Raw cover file contains bad line:%v", line)
+		}
+		result[cov] = uint32(distance) + result[cov]
+	}
+	if len(result) == 0 {
+		log.Fatalf("Raw cover distance file [%v] is empty", fileName)
+	}
+	return result
 }

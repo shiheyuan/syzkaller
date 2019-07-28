@@ -8,6 +8,9 @@ import "encoding/json"
 type Config struct {
 	// Instance name (used for identification and as GCE instance prefix).
 	Name string `json:"name"`
+
+	RawCoverDistanceFile string `json:"raw_cover_distance_file"`
+
 	// static raw cover file path
 	StaticCoverFile string `json:"static_cover_file"`
 	// Target OS/arch, e.g. "linux/arm64" or "linux/amd64/386" (amd64 OS with 386 test process).

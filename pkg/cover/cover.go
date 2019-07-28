@@ -3,6 +3,7 @@
 
 // Package cover provides types for working with coverage information (arrays of covered PCs).
 package cover
+
 // 复用这部分结构 内核代码raw cover 范围不会超过 uint32大小
 // 这个结构将raw cover序列处理为无序集合 这符合当前算法的设计
 type Cover map[uint32]struct{}
@@ -42,8 +43,7 @@ func (cov Cover) Serialize() []uint32 {
 	return res
 }
 
-
-func (cov Cover)Len()int{
+func (cov Cover) Len() int {
 	return len(cov)
 }
 
@@ -58,13 +58,13 @@ func FromRaw(raw []uint32) Cover {
 	return s
 }
 
-func FromU64RawUnchecked(raw []uint64) Cover{
-	if len(raw) ==0 {
+func FromU64RawUnchecked(raw []uint64) Cover {
+	if len(raw) == 0 {
 		return nil
 	}
-	s := make(Cover,len(raw))
-	for _,e := range raw {
-		s[uint32(e)]= struct{}{}
+	s := make(Cover, len(raw))
+	for _, e := range raw {
+		s[uint32(e)] = struct{}{}
 	}
 	return s
 }
@@ -75,7 +75,7 @@ func (s Cover) Diff(s1 Cover) Cover {
 	}
 	var res Cover
 	for e, p1 := range s1 {
-		if _, ok := s[e]; ok{
+		if _, ok := s[e]; ok {
 			continue
 		}
 		if res == nil {
@@ -92,14 +92,12 @@ func (s Cover) Intersection(s1 Cover) Cover {
 	}
 	res := make(Cover, len(s))
 	for e, p := range s {
-		if _, ok := s1[e]; ok  {
+		if _, ok := s1[e]; ok {
 			res[e] = p
 		}
 	}
 	return res
 }
-
-
 
 func (cov Cover) DiffRaw(raw []uint32) Cover {
 	var rec Cover
@@ -123,6 +121,6 @@ func RestorePC(pc uint32, base uint32) uint64 {
 	return uint64(base)<<32 + uint64(pc)
 }
 
-func CovertPC(pc uint64, base uint32) uint32{
+func CovertPC(pc uint64, base uint32) uint32 {
 	return uint32(pc - uint64(base))
 }

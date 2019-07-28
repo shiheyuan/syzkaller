@@ -310,7 +310,7 @@ func fileSet(covered, uncovered []symbolizer.Frame) map[string][]coverage {
 	return res
 }
 
-func NextInstructionPC(arch string,pc uint64) uint64{
+func NextInstructionPC(arch string, pc uint64) uint64 {
 	switch arch {
 	case "amd64":
 		return pc + 5
