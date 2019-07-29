@@ -6,7 +6,6 @@ package main
 import (
 	"bytes"
 	"fmt"
-	"math"
 	"math/rand"
 	"os"
 	"runtime/debug"
@@ -180,16 +179,38 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 			})
 	}
 	// calculate distance
-	var distance uint32 = 0
-	for newCover, _ := range inputCover {
-		_, contains := proc.fuzzer.rawCoverDistance[newCover]
-		if !contains {
-			distance = math.MaxUint32
-			break
+	// 目标数目
+	var targetNum uint32 = 1
+	for _, dis := range proc.fuzzer.rawCoverDistance {
+		if dis == 0 {
+			targetNum += 1
 		}
-		distance += proc.fuzzer.rawCoverDistance[newCover]
 	}
-	if proc.fuzzer.getCloseOrUpdate(distance) {
+	common := make([]uint32, 0)
+	for newCover, _ := range inputCover {
+		if _, contains := proc.fuzzer.rawCoverDistance[newCover]; contains {
+			common = append(common, newCover)
+		}
+	}
+	hasCommon := len(common) != 0
+	var distance uint32 = 0
+	if hasCommon {
+		missRate := 1 - float64(len(common))/float64(inputCover.Len())
+		var graphDistance uint32 = 0
+		hitTarget := 0
+		for _, hitCover := range common {
+			if proc.fuzzer.rawCoverDistance[hitCover] == 0 {
+				hitTarget += 1
+			}
+			graphDistance += proc.fuzzer.rawCoverDistance[hitCover]
+		}
+		if hitTarget != 0 {
+			distance = uint32((1 - float64(hitTarget)/float64(targetNum)) * float64(proc.fuzzer.minDistance) * missRate)
+		} else {
+			distance = uint32(missRate * float64(proc.fuzzer.minDistance))
+		}
+	}
+	if hasCommon && proc.fuzzer.getCloseOrUpdate(distance) {
 		data := item.p.Serialize()
 		sig := hash.Hash(data)
 
