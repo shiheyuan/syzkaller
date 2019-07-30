@@ -150,7 +150,7 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 	}
 
 	// 当前程序是否产生了目标raw cover
-	//common := proc.fuzzer.staticCover.Intersection(inputCover)
+	// common := proc.fuzzer.staticCover.Intersection(inputCover)
 	//if common.Empty() {
 	//	return
 	//}
@@ -192,13 +192,15 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 			common = append(common, newCover)
 		}
 	}
-	hasCommon := len(common) != 0
+	commonCover := cover.FromRaw(common)
+
+	hasCommon := len(commonCover) != 0
 	var distance uint32 = 0
 	if hasCommon {
 		missRate := 1 - float64(len(common))/float64(inputCover.Len())
 		var graphDistance uint32 = 0
 		hitTarget := 0
-		for _, hitCover := range common {
+		for hitCover, _ := range commonCover {
 			if proc.fuzzer.rawCoverDistance[hitCover] == 0 {
 				hitTarget += 1
 			}

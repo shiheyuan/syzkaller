@@ -1141,9 +1141,9 @@ func readPCsFromFile(arch string, file string) (cover.Cover, error) {
 			return nil, err
 		}
 		// cover in syzkaller is not same as collect raw cover
-		//nextPc := cover.NextInstructionPC(arch, pc)
-		//cov := cover.CovertPC(nextPc, initCoverVMOffset)
-		result = append(result, uint32(pc))
+		nextPc := cover.NextInstructionPC(arch, pc)
+		cov := cover.CovertPC(nextPc, initCoverVMOffset)
+		result = append(result, cov)
 	}
 	return cover.FromRaw(result), nil
 }
@@ -1175,20 +1175,26 @@ func get_distance(fileName string, arch string) map[uint32]uint32 {
 	scanner := bufio.NewScanner(file)
 	result := make(map[uint32]uint32)
 	for scanner.Scan() {
-		line := scanner.Text()
+		line := strings.TrimSpace(scanner.Text())
+		if len(line) == 0 {
+			continue
+		}
 		// function_name,raw_cover,_,distance
 		content := strings.Split(line, ",")
 		if len(content) != 4 {
 			log.Fatalf("Raw cover file contains bad line:%v", line)
 		}
-		pc, coverParseErr := strconv.ParseUint(content[1], 0, 64)
+		pc, coverParseErr := strconv.ParseUint(strings.TrimSpace(content[1]), 0, 64)
 		nextPc := cover.NextInstructionPC(arch, pc)
 		cov := cover.CovertPC(nextPc, initCoverVMOffset)
-		distance, distanceParseError := strconv.ParseUint(content[3], 0, 64)
+		distance, distanceParseError := strconv.ParseUint(strings.TrimSpace(content[3]), 0, 64)
 		if coverParseErr != nil || distanceParseError != nil {
 			log.Fatalf("Raw cover file contains bad line:%v", line)
 		}
-		result[cov] = uint32(distance) + result[cov]
+		if _, dupRawCover := result[cov]; dupRawCover {
+			log.Fatalf("Raw cover file contains redundant raw cover:%v", content[1])
+		}
+		result[cov] = uint32(distance)
 	}
 	if len(result) == 0 {
 		log.Fatalf("Raw cover distance file [%v] is empty", fileName)
