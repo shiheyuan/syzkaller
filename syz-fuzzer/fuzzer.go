@@ -432,15 +432,12 @@ func (fuzzer *Fuzzer) addInputToCorpus(p *prog.Prog, newCover cover.Cover, sign 
 	}
 }
 
-func (fuzzer *Fuzzer) getCloseOrUpdate(distance uint32) bool {
-	isClose := false
+func (fuzzer *Fuzzer) updateFuzzerDistance(distance uint32) {
 	fuzzer.updateDistanceLock.Lock()
 	if fuzzer.minDistance > distance {
 		fuzzer.minDistance = distance
-		isClose = true
 	}
 	fuzzer.updateDistanceLock.Unlock()
-	return isClose
 }
 
 func (fuzzer *Fuzzer) corpusSnapshot() []*prog.Prog {

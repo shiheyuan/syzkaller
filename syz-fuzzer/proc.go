@@ -180,28 +180,33 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 	}
 	// calculate distance
 	// 目标数目
-	var targetNum uint32 = 1
+	var targetNum uint32 = 0
 	for _, dis := range proc.fuzzer.rawCoverDistance {
 		if dis == 0 {
 			targetNum += 1
 		}
 	}
+	if targetNum == 0 {
+		log.Fatalf("Raw cover distance file does not contain targets themselves")
+	}
 	common := make([]uint32, 0)
-	for newCover, _ := range inputCover {
+	for newCover := range inputCover {
 		if _, contains := proc.fuzzer.rawCoverDistance[newCover]; contains {
 			common = append(common, newCover)
 		}
 	}
 	commonCover := cover.FromRaw(common)
-
-	hasCommon := len(commonCover) != 0
+	if commonCover.Len() != len(common) {
+		log.Fatalf("Intersection calculation error,commonCover.Len() != len(common) ")
+	}
+	hasCommon := commonCover.Len() != 0
 	var distance uint32 = 0
 	if hasCommon {
 		missRate := 1 - float64(len(common))/float64(inputCover.Len())
 		var graphDistance uint32 = 0
 		hitTarget := 0
 		for hitCover, _ := range commonCover {
-			if proc.fuzzer.rawCoverDistance[hitCover] == 0 {
+			if coverDistance, _ := proc.fuzzer.rawCoverDistance[hitCover]; coverDistance == 0 {
 				hitTarget += 1
 			}
 			graphDistance += proc.fuzzer.rawCoverDistance[hitCover]
@@ -211,8 +216,14 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 		} else {
 			distance = uint32(missRate * float64(proc.fuzzer.minDistance))
 		}
+		if distance == 0 {
+			log.Fatalf("BOOM,hit all targets, hit target number:%v", hitTarget)
+		}
+		if distance >= proc.fuzzer.minDistance {
+			log.Fatalf("Distance calculation error,great program found but distance does not decrease")
+		}
 	}
-	if hasCommon && proc.fuzzer.getCloseOrUpdate(distance) {
+	if hasCommon {
 		data := item.p.Serialize()
 		sig := hash.Hash(data)
 
@@ -223,6 +234,7 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 			Signal: inputSignal.Serialize(),
 			Cover:  inputCover.Serialize(),
 		})
+		proc.fuzzer.updateFuzzerDistance(distance)
 		proc.fuzzer.sendDistanceToManager(distance)
 		proc.fuzzer.addInputToCorpus(item.p, inputCover, inputSignal, sig)
 
