@@ -150,10 +150,10 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 	}
 
 	// 当前程序是否产生了目标raw cover
-	// common := proc.fuzzer.staticCover.Intersection(inputCover)
-	//if common.Empty() {
-	//	return
-	//}
+	common := proc.fuzzer.staticCover.Intersection(inputCover)
+	if common.Empty() {
+		return
+	}
 	// 是否产生了新的目标raw cover 先不加入这个限制 因为即使产生的raw cover集合相同 但signal不同则说明是不同路径
 	// 这种情况也是感兴趣程序
 	//coverDiff := proc.fuzzer.corpusCover.Diff(common)
@@ -180,69 +180,62 @@ func (proc *Proc) triageInput(item *WorkTriage) {
 	}
 	// calculate distance
 	// 目标数目
-	var targetNum uint32 = 0
-	for _, dis := range proc.fuzzer.rawCoverDistance {
+	distance := proc.getDistance(common, inputCover)
+	data := item.p.Serialize()
+	sig := hash.Hash(data)
+
+	log.Logf(2, "added new input for %v to corpus:\n%s", logCallName, data)
+	proc.fuzzer.sendInputToManager(rpctype.RPCInput{
+		Call:   callName,
+		Prog:   data,
+		Signal: inputSignal.Serialize(),
+		Cover:  inputCover.Serialize(),
+	})
+	proc.fuzzer.updateFuzzerDistance(distance)
+	proc.fuzzer.sendDistanceToManager(distance)
+	proc.fuzzer.addInputToCorpus(item.p, inputCover, inputSignal, sig)
+
+	if item.flags&ProgSmashed == 0 {
+		proc.fuzzer.workQueue.enqueue(&WorkSmash{item.p, item.call})
+	}
+
+}
+
+func (proc *Proc) getDistance(common cover.Cover, inputCover cover.Cover) uint32 {
+	target := make([]uint32, 0)
+	for cov, dis := range proc.fuzzer.rawCoverDistance {
 		if dis == 0 {
-			targetNum += 1
+			target = append(target, cov)
 		}
 	}
-	if targetNum == 0 {
+	hitTarget := make([]uint32, 0)
+	for _, targetCover := range target {
+		if _, contain := common[targetCover]; contain {
+			hitTarget = append(hitTarget, targetCover)
+		}
+	}
+	if len(hitTarget) == 0 {
 		log.Fatalf("Raw cover distance file does not contain targets themselves")
 	}
-	common := make([]uint32, 0)
-	for newCover := range inputCover {
-		if _, contains := proc.fuzzer.rawCoverDistance[newCover]; contains {
-			common = append(common, newCover)
-		}
-	}
-	commonCover := cover.FromRaw(common)
-	if commonCover.Len() != len(common) {
-		log.Fatalf("Intersection calculation error,commonCover.Len() != len(common) ")
-	}
-	hasCommon := commonCover.Len() != 0
 	var distance uint32 = 0
-	if hasCommon {
-		missRate := 1 - float64(len(common))/float64(inputCover.Len())
-		var graphDistance uint32 = 0
-		hitTarget := 0
-		for hitCover, _ := range commonCover {
-			if coverDistance, _ := proc.fuzzer.rawCoverDistance[hitCover]; coverDistance == 0 {
-				hitTarget += 1
-			}
-			graphDistance += proc.fuzzer.rawCoverDistance[hitCover]
-		}
-		if hitTarget != 0 {
-			distance = uint32((1 - float64(hitTarget)/float64(targetNum)) * float64(proc.fuzzer.minDistance) * missRate)
-		} else {
-			distance = uint32(missRate * float64(proc.fuzzer.minDistance))
-		}
-		if distance == 0 {
-			log.Fatalf("BOOM,hit all targets, hit target number:%v", hitTarget)
-		}
-		if distance >= proc.fuzzer.minDistance {
-			log.Fatalf("Distance calculation error,great program found but distance does not decrease")
-		}
+	missRate := 1 - float64(len(common))/float64(inputCover.Len())
+	//var graphDistance uint32 = 0
+	//	hitTarget := 0
+	//	for hitCover, _ := range common {
+	//		graphDistance += proc.fuzzer.rawCoverDistance[hitCover]
+	//	}
+	if len(hitTarget) != 0 {
+		distance = uint32((1 - float64(len(hitTarget))/float64(len(target))) * float64(proc.fuzzer.minDistance) * missRate)
+	} else {
+		distance = uint32(missRate * float64(proc.fuzzer.minDistance))
 	}
-	if hasCommon {
-		data := item.p.Serialize()
-		sig := hash.Hash(data)
-
-		log.Logf(2, "added new input for %v to corpus:\n%s", logCallName, data)
-		proc.fuzzer.sendInputToManager(rpctype.RPCInput{
-			Call:   callName,
-			Prog:   data,
-			Signal: inputSignal.Serialize(),
-			Cover:  inputCover.Serialize(),
-		})
-		proc.fuzzer.updateFuzzerDistance(distance)
-		proc.fuzzer.sendDistanceToManager(distance)
-		proc.fuzzer.addInputToCorpus(item.p, inputCover, inputSignal, sig)
-
-		if item.flags&ProgSmashed == 0 {
-			proc.fuzzer.workQueue.enqueue(&WorkSmash{item.p, item.call})
-		}
+	if distance == 0 {
+		log.Fatalf("BOOM,hit all targets, hit target number:%v", hitTarget)
 	}
-
+	if distance >= proc.fuzzer.minDistance {
+		log.Fatalf("Distance calculation error,great program found but distance does not decrease")
+	}
+	return distance
 }
 
 func reexecutionSuccess(info *ipc.ProgInfo, oldInfo *ipc.CallInfo, call int) bool {

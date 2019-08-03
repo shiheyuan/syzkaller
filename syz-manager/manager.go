@@ -200,16 +200,14 @@ func RunManager(cfg *mgrconfig.Config, target *prog.Target, sysTarget *targets.T
 	mgr.initHTTP()
 	mgr.collectUsedFiles()
 
-	staticCover, err := readPCsFromFile(cfg.TargetArch, cfg.StaticCoverFile)
-	if err != nil {
-		log.Fatalf("Failed to read static cover from:%v, %v", cfg.StaticCoverFile, err)
-	}
-	log.Logf(0, "Static cover loaded, number %v", staticCover.Len())
-	mgr.staticCover = staticCover
-
-	// read raw cover distance from file
 	mgr.rawCoverDistance = get_distance(cfg.RawCoverDistanceFile, cfg.TargetArch)
 	log.Logf(0, "Raw cover distance loaded,number %v", len(mgr.rawCoverDistance))
+	staticCover := make([]uint32, 0)
+	for cov := range mgr.rawCoverDistance {
+		staticCover = append(staticCover, cov)
+	}
+	mgr.staticCover = cover.FromRaw(staticCover)
+	log.Logf(0, "Static cover loaded, number %v", mgr.staticCover.Len())
 
 	// Create RPC server for fuzzers.
 	mgr.port, err = startRPCServer(mgr)
